@@ -1,0 +1,1782 @@
+openapi: 3.0.3
+info:
+  title: 骑行赛事报名系统 API
+  version: 1.0.0
+  x-frozen-at: 2026-10-25
+  description: |
+    MVP 版本：仅支持个人报名，不含团体报名。
+    本契约于 2026-10-25 随 docs/state-machine.md 一并冻结；
+    任何状态迁移或接口变更，须经人工批准并同步更新两份文件。
+    状态机基准为 docs/state-machine.md；错误码枚举见 ErrorResponse.code。
+    所有接口前缀 /api/v1。
+    小程序端接口（除 wechat-login 外）需 Bearer JWT 鉴权。
+    管理后台接口需 Bearer JWT 且 role=admin。
+    剩余名额 remaining_slots 的唯一来源为 Redis，禁止从 MySQL 实时 COUNT。
+    Order 状态包含 refunding（退款申请受理）与 refund_failed（REFUND.CLOSED/ABNORMAL 失败）；
+    refunded 由 REFUND.SUCCESS 触发。Enrollment.refunded 仅由 Order 退款成功事务联动进入。
+    请求体/查询参数校验失败统一返回 400 INVALID_ARGUMENT，不返回裸 500。
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: 本地开发
+  - url: https://api.example.com/api/v1
+    description: 生产
+
+tags:
+  - name: auth
+    description: 微信登录与鉴权
+  - name: events
+    description: 赛事浏览（公开）
+  - name: enrollments
+    description: 报名与名额锁定
+  - name: payments
+    description: 微信支付
+  - name: notifications
+    description: 订阅消息
+  - name: admin
+    description: 管理后台（需要 role=admin）
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    BadRequest:
+      description: 请求参数校验失败（INVALID_ARGUMENT）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: 未携带或无效 JWT（AUTH_INVALID_TOKEN）；JWT 已过期（AUTH_EXPIRED）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: 当前用户不是管理员（AUTH_FORBIDDEN）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: 未预期的服务端异常（INTERNAL_ERROR）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code:
+          type: string
+          description: 业务错误码，取值见 enum
+          enum:
+            - AUTH_INVALID_TOKEN
+            - AUTH_EXPIRED
+            - AUTH_INVALID_CODE
+            - AUTH_FORBIDDEN
+            - INVALID_ARGUMENT
+            - EVENT_NOT_FOUND
+            - EVENT_NOT_OPEN
+            - GROUP_NOT_FOUND
+            - GROUP_SOLD_OUT
+            - GROUP_CLOSED
+            - GROUP_IN_USE
+            - GROUP_COUNTER_EXISTS
+            - GROUP_RECONCILE_FAILED
+            - EVENT_HAS_GROUPS
+            - REGISTRATION_DEADLINE_PASSED
+            - INVALID_TIME_RANGE
+            - LOCK_INVALID
+            - LOCK_EXPIRED
+            - LOCK_ALREADY_CONSUMED
+            - ENROLLMENT_DUPLICATE
+            - ENROLLMENT_NOT_FOUND
+            - ORDER_NOT_FOUND
+            - ORDER_STATUS_INVALID
+            - PAY_SIGN_INVALID
+            - PAY_AMOUNT_MISMATCH
+            - DISCLAIMER_VERSION_MISMATCH
+            - RATE_LIMITED
+            - INTERNAL_ERROR
+        message:
+          type: string
+        request_id:
+          type: string
+          description: 贯穿请求日志与响应体的请求 ID
+
+    User:
+      type: object
+      required: [id, nickname, avatar_url, role]
+      properties:
+        id:
+          type: string
+          description: 用户唯一 ID（UUID v4）
+        nickname:
+          type: string
+        avatar_url:
+          type: string
+        role:
+          type: string
+          enum: [rider, admin]
+
+    EventListItem:
+      type: object
+      required:
+        - id
+        - title
+        - cover_url
+        - start_time
+        - end_time
+        - duration_minutes
+        - location
+        - lifecycle_status
+        - registration_status
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        cover_url:
+          type: string
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+          description: 赛事结束时间，必须晚于 start_time
+        duration_minutes:
+          type: integer
+          minimum: 0
+          description: 赛事持续分钟数，由后端按 end_time - start_time 计算，前端不得重复计算
+        location:
+          type: string
+        lifecycle_status:
+          type: string
+          enum: [draft, published, finished, cancelled]
+          description: 赛事生命周期；与报名状态解耦
+        registration_status:
+          type: string
+          enum: [not_started, open, closed]
+          description: |
+            报名状态，由后端实时推导，不落库。优先级：
+            手动关闭 → closed；now < registration_open_at → not_started；
+            now > registration_deadline → closed；lifecycle_status=cancelled → closed；否则 open。
+        registration_closed_reason:
+          type: string
+          nullable: true
+          description: 手动关闭报名时填写的原因；未关闭时为 null
+        registration_open_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 报名开始时间；null 表示不限制
+        registration_deadline:
+          type: string
+          format: date-time
+          nullable: true
+          description: 报名截止时间；null 表示不限制
+        min_price:
+          type: integer
+          description: 单位分，所有组别中的最低价
+
+    Group:
+      type: object
+      required:
+        - id
+        - event_id
+        - name
+        - price
+        - total_slots
+        - remaining_slots
+        - start_time
+        - status
+      properties:
+        id:
+          type: string
+        event_id:
+          type: string
+        name:
+          type: string
+          description: 组别名称，如“精英组”“大众组”
+        price:
+          type: integer
+          minimum: 0
+          description: 单位分
+        total_slots:
+          type: integer
+          minimum: 1
+        remaining_slots:
+          type: integer
+          minimum: 0
+          description: 实时剩余名额；唯一来源为 Redis group:{group_id}:remaining，禁止从 MySQL 实时 COUNT
+        start_time:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [open, closed, sold_out]
+          description: sold_out 由 remaining_slots=0 推导，不单独落库
+        form_schema:
+          type: object
+          description: 动态表单字段定义，前端据此渲染
+          additionalProperties: true
+        disclaimer_version:
+          type: string
+          description: 免责协议版本号，提交报名时须与之一致
+
+    EventDetail:
+      allOf:
+        - $ref: '#/components/schemas/EventListItem'
+        - type: object
+          required: [description, groups]
+          properties:
+            description:
+              type: string
+              description: 富文本或 Markdown
+            rules:
+              type: string
+            groups:
+              type: array
+              items:
+                $ref: '#/components/schemas/Group'
+
+    LockRequest:
+      type: object
+      required: [group_id]
+      properties:
+        group_id:
+          type: string
+
+    LockResponse:
+      type: object
+      required: [lock_token, expires_at, remaining_slots]
+      properties:
+        lock_token:
+          type: string
+          description: 一次性锁定凭证，提交报名时携带
+        expires_at:
+          type: string
+          format: date-time
+          description: 锁定过期时间（默认 15 分钟）
+        remaining_slots:
+          type: integer
+          minimum: 0
+          description: 锁定成功后的实时剩余名额（来自 Redis）
+
+    SubmitEnrollmentRequest:
+      type: object
+      required:
+        - lock_token
+        - group_id
+        - form_data
+        - disclaimer_version
+        - disclaimer_signed_at
+      properties:
+        lock_token:
+          type: string
+        group_id:
+          type: string
+        form_data:
+          type: object
+          description: 按 group.form_schema 填写；身份证、体检报告等敏感字段加密存储
+          additionalProperties: true
+        disclaimer_version:
+          type: string
+        disclaimer_signed_at:
+          type: string
+          format: date-time
+
+    Enrollment:
+      type: object
+      required: [id, event_id, group_id, user_id, order_id, status, created_at]
+      properties:
+        id:
+          type: string
+        event_id:
+          type: string
+        group_id:
+          type: string
+        user_id:
+          type: string
+        order_id:
+          type: string
+        status:
+          type: string
+          description: |
+            报名状态。refunded 仅由 Order 退款成功事务联动进入；
+            Order 处于 refunding/refund_failed 时 Enrollment 保持 paid/confirmed。
+          enum:
+            - pending_payment
+            - paid
+            - confirmed
+            - cancelled
+            - refunded
+        form_data:
+          type: object
+          description: 动态表单数据；列表查询默认脱敏返回
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    Order:
+      type: object
+      required: [id, enrollment_id, amount, status, created_at]
+      properties:
+        id:
+          type: string
+        enrollment_id:
+          type: string
+        amount:
+          type: integer
+          minimum: 0
+          description: 单位分
+        status:
+          type: string
+          description: |
+            订单状态。refunding 表示退款申请已受理；refunded 由 REFUND.SUCCESS 触发；
+            refund_failed 表示 REFUND.CLOSED/ABNORMAL，退款失败且不回补 Redis。
+          enum:
+            - pending_payment
+            - paid
+            - refunding
+            - refunded
+            - refund_failed
+            - expired
+        paid_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    SubmitEnrollmentResponse:
+      type: object
+      required: [enrollment, order]
+      properties:
+        enrollment:
+          $ref: '#/components/schemas/Enrollment'
+        order:
+          $ref: '#/components/schemas/Order'
+
+    PrepayResponse:
+      type: object
+      required: [timeStamp, nonceStr, package, signType, paySign]
+      properties:
+        timeStamp:
+          type: string
+        nonceStr:
+          type: string
+        package:
+          type: string
+        signType:
+          type: string
+          enum: [RSA]
+        paySign:
+          type: string
+
+    WechatPayNotifyRequest:
+      type: object
+      description: 微信支付 V3 回调信封；resource.ciphertext 须用 APIv3 密钥解密后再处理。
+      required: [id, event_type, resource]
+      properties:
+        id:
+          type: string
+          description: 回调通知 ID
+        event_type:
+          type: string
+          description: 事件类型；MVP 只处理 TRANSACTION.SUCCESS，其余记录日志后返回 200
+        summary:
+          type: string
+        create_time:
+          type: string
+          format: date-time
+        resource:
+          type: object
+          required: [algorithm, ciphertext, nonce]
+          properties:
+            algorithm:
+              type: string
+              enum: [AEAD_AES_256_GCM]
+            ciphertext:
+              type: string
+              description: Base64 密文，解密后结构为 WechatPayTransaction
+            associated_data:
+              type: string
+            nonce:
+              type: string
+            original_type:
+              type: string
+
+    WechatPayTransaction:
+      type: object
+      description: resource 解密后的明文，不直接出现在 HTTP 请求体中；金额单位为分。
+      required: [out_trade_no, transaction_id, trade_state, amount]
+      properties:
+        out_trade_no:
+          type: string
+          description: 商户订单号，对应 Order.id
+        transaction_id:
+          type: string
+          description: 微信支付订单号；支付回调的幂等键
+        trade_state:
+          type: string
+          enum: [SUCCESS]
+        success_time:
+          type: string
+          format: date-time
+        amount:
+          type: object
+          required: [total, currency]
+          properties:
+            total:
+              type: integer
+              description: 订单总金额（分），必须等于 Order.amount
+            payer_total:
+              type: integer
+            currency:
+              type: string
+              enum: [CNY]
+
+    PaginatedEnrollments:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Enrollment'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    StatsOverview:
+      type: object
+      required: [event_id, groups]
+      properties:
+        event_id:
+          type: string
+        groups:
+          type: array
+          items:
+            type: object
+            required:
+              - group_id
+              - total_slots
+              - active_lock_count
+              - pending_payment_count
+              - paid_count
+              - remaining_slots
+            properties:
+              group_id:
+                type: string
+              total_slots:
+                type: integer
+                description: MySQL groups.total_slots，仅作配置与对账基准
+              active_lock_count:
+                type: integer
+                description: enrollment_locks.status='active' 的数量
+              pending_payment_count:
+                type: integer
+                description: enrollments.status='pending_payment' 的数量；已消费锁，仍占用名额
+              paid_count:
+                type: integer
+                description: enrollments.status IN ('paid','confirmed') 的数量；refunded 不计入
+              remaining_slots:
+                type: integer
+                description: 实时剩余名额；唯一来源为 Redis group:{group_id}:remaining，禁止从 MySQL 实时 COUNT
+
+    DeleteResult:
+      type: object
+      required: [id, deleted]
+      description: 管理后台删除赛事/组别的响应体。
+      properties:
+        id:
+          type: string
+          description: 被删除记录的 UUID
+        deleted:
+          type: boolean
+          description: 恒为 true；删除失败时返回错误信封而非该响应
+
+    GroupRemainingRebuild:
+      type: object
+      description: |
+        名额重建结果。remaining_slots 为按对账等式反推后写回 Redis 的值；
+        previous_remaining 为重建前 Redis 中的值，key 原本缺失时省略。
+      required:
+        - group_id
+        - total_slots
+        - remaining_slots
+        - mode
+        - active_lock_count
+        - pending_payment_count
+        - paid_count
+      properties:
+        group_id:
+          type: string
+        total_slots:
+          type: integer
+          description: MySQL groups.total_slots，仅作配置与对账基准
+        remaining_slots:
+          type: integer
+          description: 按对账等式反推并写入 Redis 的剩余名额
+        previous_remaining:
+          type: integer
+          nullable: true
+          description: 重建前 Redis 中的值；key 缺失时该字段省略
+        mode:
+          type: string
+          enum: [created, overwritten, unchanged]
+          description: created=原本缺失已写入；overwritten=force 覆盖；unchanged=已存在且与等式一致
+        active_lock_count:
+          type: integer
+          description: enrollment_locks.status='active' 的数量
+        pending_payment_count:
+          type: integer
+          description: enrollments.status='pending_payment' 的数量
+        paid_count:
+          type: integer
+          description: enrollments.status IN ('paid','confirmed') 的数量
+
+    ReleaseHealth:
+      type: object
+      description: |
+        只读释放健康检查：锁过期超过 1 分钟仍为 active（锁泄漏），
+        订单 pending_payment 超过 15 分钟未释放（支付超时任务遗漏）。
+      required: [event_id, checked_at, thresholds, groups]
+      properties:
+        event_id:
+          type: string
+        checked_at:
+          type: string
+          format: date-time
+        thresholds:
+          type: object
+          required: [lock_overdue_seconds, pay_timeout_minutes]
+          properties:
+            lock_overdue_seconds:
+              type: integer
+              description: 锁泄漏判定阈值（秒），固定 60
+            pay_timeout_minutes:
+              type: integer
+              description: 支付超时遗漏判定阈值（分钟），固定 15
+        groups:
+          type: array
+          items:
+            type: object
+            required:
+              - group_id
+              - group_name
+              - lock_leak_count
+              - max_overdue_seconds
+              - pending_timeout_count
+              - leak_samples
+              - pending_samples
+            properties:
+              group_id:
+                type: string
+              group_name:
+                type: string
+              lock_leak_count:
+                type: integer
+                description: status='active' 且 expires_at 已过期超过阈值的锁数量
+              max_overdue_seconds:
+                type: integer
+                description: 上述锁中最大的已过期秒数；无泄漏时为 0
+              pending_timeout_count:
+                type: integer
+                description: pending_payment 且 created_at 超过阈值的订单数量
+              leak_samples:
+                type: array
+                description: 最多 5 条锁泄漏样例
+                items:
+                  type: object
+                  required: [token, expires_at, overdue_seconds]
+                  properties:
+                    token:
+                      type: string
+                    expires_at:
+                      type: string
+                      format: date-time
+                    overdue_seconds:
+                      type: integer
+              pending_samples:
+                type: array
+                description: 最多 5 条支付超时遗漏样例
+                items:
+                  type: object
+                  required: [order_id, created_at, overdue_minutes]
+                  properties:
+                    order_id:
+                      type: string
+                    created_at:
+                      type: string
+                      format: date-time
+                    overdue_minutes:
+                      type: integer
+
+    EventRegistrationState:
+      type: object
+      description: 报名开关操作后的赛事状态（只返回报名相关字段）。
+      required:
+        - event_id
+        - lifecycle_status
+        - registration_status
+        - registration_manually_closed
+      properties:
+        event_id:
+          type: string
+        lifecycle_status:
+          type: string
+          enum: [draft, published, finished, cancelled]
+        registration_status:
+          type: string
+          enum: [not_started, open, closed]
+        registration_manually_closed:
+          type: boolean
+        registration_closed_reason:
+          type: string
+          nullable: true
+        registration_open_at:
+          type: string
+          format: date-time
+          nullable: true
+        registration_deadline:
+          type: string
+          format: date-time
+          nullable: true
+
+paths:
+  # ===========================================================================
+  # Block 1 · auth
+  # ===========================================================================
+  /auth/wechat-login:
+    post:
+      tags: [auth]
+      operationId: authWechatLogin
+      summary: 微信小程序登录
+      description: |
+        公开接口。使用 wx.login 返回的临时 code 换取用户身份并签发 JWT。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  description: wx.login 返回的临时 code
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, user]
+                properties:
+                  token:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/User'
+        '400':
+          description: code 缺失或格式非法（INVALID_ARGUMENT），或 code 无效/已过期（AUTH_INVALID_CODE）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Block 2 · events（公开）
+  # ===========================================================================
+  /events:
+    get:
+      tags: [events]
+      operationId: listEvents
+      summary: 赛事列表（公开）
+      description: |
+        列表接口不返回 remaining_slots；实时剩余名额只在赛事详情的 groups[].remaining_slots 中返回，
+        其唯一来源为 Redis group:{group_id}:remaining，禁止从 MySQL 实时 COUNT。
+      security: []
+      parameters:
+        - name: registration_status
+          in: query
+          required: false
+          description: 按报名状态筛选；由后端按同一推导规则在 SQL 中过滤
+          schema:
+            type: string
+            enum: [not_started, open, closed]
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EventListItem'
+                  total:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /events/{event_id}:
+    get:
+      tags: [events]
+      operationId: getEvent
+      summary: 赛事详情（公开）
+      description: |
+        groups[].remaining_slots 的唯一来源为 Redis group:{group_id}:remaining，禁止从 MySQL 实时 COUNT。
+      security: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventDetail'
+        '404':
+          description: 赛事不存在（EVENT_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Block 3 · enrollments
+  # ===========================================================================
+  /enrollments/lock:
+    post:
+      tags: [enrollments]
+      operationId: lockEnrollment
+      summary: 锁定名额
+      description: |
+        状态机：Lock 由“无”进入 active。
+        Redis Lua 脚本原子预减，禁止 GET 后 DECR：扣减与 remaining > 0 判断必须在同一脚本内完成。
+        1) 先以 SET lock:{user_id}:{group_id} NX PX 15000 串行化；已存在时返回 RATE_LIMITED；
+        2) Lua 脚本原子预减 group:{group_id}:remaining 1 个名额；名额不足时返回 GROUP_SOLD_OUT；
+        3) 成功后写入 enrollment_locks（status=active，expires_at=now+15min），返回 lock_token；
+        4) 若 Redis 预减成功但锁记录落库失败，必须在同一请求内 INCR 回补，禁止留下 active 记录。
+        registration_status != 'open' 时返回 EVENT_NOT_OPEN，与 remaining_slots 的判断相互独立，
+        先判断报名开关，再判断名额。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LockRequest'
+      responses:
+        '200':
+          description: 锁定成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LockResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: 组别不存在（GROUP_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 赛事未开放报名（EVENT_NOT_OPEN）、组别已关闭（GROUP_CLOSED）或名额不足（GROUP_SOLD_OUT）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: 同一用户对同一组别重复锁定（RATE_LIMITED）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /enrollments:
+    post:
+      tags: [enrollments]
+      operationId: submitEnrollment
+      summary: 提交报名
+      description: |
+        状态机：Lock active → consumed。
+        在单个事务内创建 Enrollment + Order（均为 pending_payment），并将 lock 状态置为 consumed；
+        不在此接口扣减 Redis（名额已在 lock 阶段预减），也不在此接口回补 Redis。
+        仅当 lock 仍为 active 且未过期时才可消费；否则返回 LOCK_INVALID / LOCK_EXPIRED / LOCK_ALREADY_CONSUMED。
+        同一 lock_token 只能成功提交一次；重复报名返回 ENROLLMENT_DUPLICATE。
+        registration_status != 'open' 时返回 EVENT_NOT_OPEN，与 remaining_slots 的判断相互独立，
+        先判断报名开关，再判断名额；同样用于防止“deadline 前锁定、deadline 后提交”的窗口。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitEnrollmentRequest'
+      responses:
+        '201':
+          description: 报名与订单创建成功（pending_payment）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitEnrollmentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: 组别不存在（GROUP_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: lock 无效（LOCK_INVALID）、已过期（LOCK_EXPIRED）、已消费（LOCK_ALREADY_CONSUMED）、重复报名（ENROLLMENT_DUPLICATE）或免责协议版本不一致（DISCLAIMER_VERSION_MISMATCH）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /enrollments/my:
+    get:
+      tags: [enrollments]
+      operationId: listMyEnrollments
+      summary: 我的报名列表
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Enrollment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /enrollments/{enrollment_id}:
+    get:
+      tags: [enrollments]
+      operationId: getEnrollment
+      summary: 报名详情
+      description: |
+        仅允许报名本人访问；不存在或无权访问统一返回 404（ENROLLMENT_NOT_FOUND）。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: enrollment_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Enrollment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: 报名不存在或无权访问（ENROLLMENT_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Block 4 · payments
+  # ===========================================================================
+  /payments/prepay:
+    post:
+      tags: [payments]
+      operationId: prepayOrder
+      summary: 微信支付统一下单
+      description: |
+        仅 Order.status=pending_payment 可调用；本接口不修改 Order/Enrollment 状态，也不扣减 Redis。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order_id]
+              properties:
+                order_id:
+                  type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrepayResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: 订单不存在（ORDER_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 订单状态非法，仅 pending_payment 可支付（ORDER_STATUS_INVALID）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /payments/notify:
+    post:
+      tags: [payments]
+      operationId: handlePaymentNotify
+      summary: 微信支付回调
+      description: |
+        微信支付 V3 回调。处理顺序不可协商：
+        1) 验签：先验签，失败返回 401（PAY_SIGN_INVALID），不修改任何数据；
+        2) 锁行：事务内先执行 SELECT ... FOR UPDATE 锁定 Order 行；
+        3) 状态：仅当 order.status='pending_payment' 时才迁移至 paid；
+        4) 幂等：重复回调（order.status 已非 pending_payment）直接 COMMIT 返回 200，不执行 UPDATE；
+        5) 金额：回调金额与 order.amount 不一致时不迁移，记录 PAY_AMOUNT_MISMATCH 告警，仍返回 200；
+        6) 事务：Order→paid 与 Enrollment→paid 必须在同一数据库事务内；
+        7) Redis：支付回调不执行 INCR/DECR（名额已在锁定阶段占用）。
+      security: []
+      parameters:
+        - name: Wechatpay-Timestamp
+          in: header
+          required: true
+          description: 微信支付回调时间戳，参与验签
+          schema:
+            type: string
+        - name: Wechatpay-Nonce
+          in: header
+          required: true
+          description: 微信支付回调随机串，参与验签
+          schema:
+            type: string
+        - name: Wechatpay-Signature
+          in: header
+          required: true
+          description: 微信支付回调签名
+          schema:
+            type: string
+        - name: Wechatpay-Serial
+          in: header
+          required: true
+          description: 微信支付平台证书序列号
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WechatPayNotifyRequest'
+      responses:
+        '200':
+          description: 接收成功（微信要求 200）；重复回调、金额不一致也返回 200
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: 回调验签失败（PAY_SIGN_INVALID）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Block 5 · notifications
+  # ===========================================================================
+  /notifications/subscribe:
+    post:
+      tags: [notifications]
+      operationId: subscribeNotifications
+      summary: 上报订阅消息授权结果
+      description: |
+        记录用户已授权的模板 ID 及其消耗状态。通知发送走异步旁路，
+        发送失败仅记录日志，不影响报名/支付主链路。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [template_ids]
+              properties:
+                template_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: OK
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ===========================================================================
+  # Block 6 · admin（需要 role=admin）
+  # ===========================================================================
+  /admin/events:
+    post:
+      tags: [admin]
+      operationId: adminCreateEvent
+      summary: 创建赛事
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - title
+                - registration_open_at
+                - registration_deadline
+                - start_time
+                - end_time
+                - location
+                - description
+              properties:
+                title:
+                  type: string
+                cover_url:
+                  type: string
+                registration_open_at:
+                  type: string
+                  format: date-time
+                  description: 报名开放时间，必须早于 registration_deadline
+                registration_deadline:
+                  type: string
+                  format: date-time
+                  description: 报名截止时间，必须晚于 open_at 且不晚于 start_time
+                start_time:
+                  type: string
+                  format: date-time
+                end_time:
+                  type: string
+                  format: date-time
+                  description: 必须晚于 start_time
+                location:
+                  type: string
+                description:
+                  type: string
+                rules:
+                  type: string
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/events/{event_id}:
+    put:
+      tags: [admin]
+      operationId: adminUpdateEvent
+      summary: 更新赛事
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                cover_url:
+                  type: string
+                registration_open_at:
+                  type: string
+                  format: date-time
+                  description: 报名开放时间，必须早于 registration_deadline
+                registration_deadline:
+                  type: string
+                  format: date-time
+                  description: 报名截止时间，必须晚于 open_at 且不晚于 start_time
+                start_time:
+                  type: string
+                  format: date-time
+                end_time:
+                  type: string
+                  format: date-time
+                  description: 必须晚于 start_time
+                location:
+                  type: string
+                description:
+                  type: string
+                rules:
+                  type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 赛事不存在（EVENT_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags: [admin]
+      operationId: adminDeleteEvent
+      summary: 删除赛事
+      description: |
+        硬删除赛事配置，仅用于清理联调/压测夹具，操作写入审计日志（谁、何时、删除了哪场赛事）。
+        赛事下仍有组别时返回 409 EVENT_HAS_GROUPS，不做级联删除：组别承载名额计数与报名数据，
+        必须先对每个组别执行 DELETE /admin/groups/{group_id}。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 赛事不存在（EVENT_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 赛事下仍有组别（EVENT_HAS_GROUPS）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/groups:
+    post:
+      tags: [admin]
+      operationId: adminCreateGroup
+      summary: 创建组别
+      description: |
+        先写 MySQL；MySQL 插入成功后，必须在 Redis 初始化 group:{group_id}:remaining = total_slots。
+        若 Redis 初始化失败，必须回滚 MySQL 插入，或将组别标记为不可用并禁止其对外展示/报名。
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - event_id
+                - name
+                - price
+                - total_slots
+                - start_time
+                - form_schema
+                - disclaimer_version
+              properties:
+                event_id:
+                  type: string
+                name:
+                  type: string
+                price:
+                  type: integer
+                  minimum: 0
+                total_slots:
+                  type: integer
+                  minimum: 1
+                start_time:
+                  type: string
+                  format: date-time
+                form_schema:
+                  type: object
+                disclaimer_version:
+                  type: string
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 赛事不存在（EVENT_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/groups/{group_id}:
+    put:
+      tags: [admin]
+      operationId: adminUpdateGroup
+      summary: 更新组别
+      description: |
+        调整 total_slots 时同步更新 Redis：
+        新剩余 = 原剩余 + (新 total_slots - 原 total_slots)；若新剩余 < 0，拒绝操作并返回 GROUP_SOLD_OUT。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                price:
+                  type: integer
+                  minimum: 0
+                total_slots:
+                  type: integer
+                  minimum: 1
+                start_time:
+                  type: string
+                  format: date-time
+                form_schema:
+                  type: object
+                disclaimer_version:
+                  type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Group'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 组别不存在（GROUP_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 名额调整导致剩余为负（GROUP_SOLD_OUT）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags: [admin]
+      operationId: adminDeleteGroup
+      summary: 删除组别
+      description: |
+        硬删除组别配置，仅用于清理联调/压测夹具，操作写入审计日志。
+        只要该组别存在 enrollment_locks、enrollments 或 orders 记录就返回 409 GROUP_IN_USE：
+        硬删除报名历史会破坏可追溯性与对账口径，此类组别应保留或按业务流程归档。
+        MySQL 删除成功后同步删除 Redis group:{group_id}:remaining。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 组别不存在（GROUP_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 组别仍存在锁、报名或订单（GROUP_IN_USE）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/groups/{group_id}/rebuild-remaining:
+    post:
+      tags: [admin]
+      operationId: adminRebuildGroupRemaining
+      summary: 重建组别名额计数器
+      description: |
+        修复 Redis 中 group:{group_id}:remaining 缺失的组别（现象：赛事详情 500、报名被判 GROUP_SOLD_OUT）。
+        remaining 按 docs/state-machine.md 第八节对账等式反推：
+        remaining_slots = total_slots - active_lock_count - pending_payment_count - paid_count。
+        默认只在 key 缺失时写入；key 已存在且与等式结果不一致时返回 409 GROUP_COUNTER_EXISTS，
+        需显式传 force=true 才覆盖——覆盖前必须停止该组别的报名流量，否则可能与在途锁定竞争。
+        反推结果为负说明数据本身已不满足等式，返回 409 GROUP_RECONCILE_FAILED，不修改 Redis。
+        操作写入审计日志（谁、何时、重建了哪个组别、旧值、新值、四项计数）。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: force
+          in: query
+          required: false
+          description: 是否允许覆盖已存在且取值不一致的计数 key，默认 false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: 重建结果（mode=created / overwritten / unchanged）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupRemainingRebuild'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 组别不存在（GROUP_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: |
+            计数 key 已存在且与对账等式不一致（GROUP_COUNTER_EXISTS），
+            或反推剩余为负（GROUP_RECONCILE_FAILED）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/enrollments:
+    get:
+      tags: [admin]
+      operationId: adminListEnrollments
+      summary: 报名名单查询
+      description: 敏感字段默认脱敏返回。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: event_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: group_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          description: 报名状态；refunded 由 Order 退款成功事务联动进入
+          schema:
+            type: string
+            enum: [pending_payment, paid, confirmed, cancelled, refunded]
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedEnrollments'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/enrollments/export:
+    get:
+      tags: [admin]
+      operationId: adminExportEnrollments
+      summary: 导出报名数据（Excel）
+      description: 同步返回 xlsx 文件流。单次导出最多 10000 条，超过上限时仅导出前 10000 条并在日志中标记截断；导出操作必须记录审计日志。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: event_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: group_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: fields
+          in: query
+          required: false
+          description: 逗号分隔的导出字段，缺省使用全部字段
+          schema:
+            type: string
+      responses:
+        '200':
+          description: xlsx 文件流
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 赛事不存在（EVENT_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/stats/overview:
+    get:
+      tags: [admin]
+      operationId: adminGetStatsOverview
+      summary: 赛事统计总览
+      description: |
+        统计口径与 docs/state-machine.md 第六节对账等式对齐：
+        total_slots 为 MySQL 配置值；remaining_slots 实时取自 Redis group:{group_id}:remaining，禁止从 MySQL 实时 COUNT。
+        active_lock_count = enrollment_locks.status='active'；
+        pending_payment_count = enrollments.status='pending_payment'（已消费锁，仍占用名额）；
+        paid_count = enrollments.status IN ('paid','confirmed')。
+        完整对账等式：remaining_slots + active_lock_count + pending_payment_count + paid_count = total_slots。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: event_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsOverview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 赛事不存在（EVENT_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /admin/events/{event_id}/release-health:
+    get:
+      tags: [admin]
+      operationId: adminGetReleaseHealth
+      summary: 释放健康检查（锁泄漏 / 支付超时遗漏）
+      description: |
+        只读诊断，不修改任何数据：
+        - 锁泄漏：enrollment_locks.status='active' 且 expires_at 已过期超过 1 分钟；
+        - 支付超时遗漏：orders.status='pending_payment' 且 created_at 超过 15 分钟未释放。
+        每个组别最多返回 5 条样例，便于定位具体 token / 订单。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseHealth'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 赛事不存在（EVENT_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /admin/events/{event_id}/registration/close:
+    patch:
+      tags: [admin]
+      operationId: adminCloseEventRegistration
+      summary: 手动关闭报名
+      description: |
+        置 registration_manually_closed=true，记录 reason 与操作日志。
+        幂等：已关闭时重复调用返回 200 与当前状态；仅更新报名开关字段，
+        不修改任何 enrollment / order / lock 状态。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 255
+                  description: 关闭原因；为空时默认“手动关闭”
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventRegistrationState'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 赛事不存在（EVENT_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/events/{event_id}/registration/open:
+    patch:
+      tags: [admin]
+      operationId: adminOpenEventRegistration
+      summary: 重新开放报名
+      description: |
+        置 registration_manually_closed=false 并清空关闭原因，重新计算 registration_status。
+        若截止时间已过（deadline 非空且 now > deadline），返回 409 REGISTRATION_DEADLINE_PASSED，
+        且不修改数据库。
+        幂等：已开放时重复调用返回 200 与当前状态；不修改任何 enrollment / order / lock 状态。
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventRegistrationState'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 赛事不存在（EVENT_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 报名截止时间已过（REGISTRATION_DEADLINE_PASSED）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'

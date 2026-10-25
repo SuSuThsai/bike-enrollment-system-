@@ -1,0 +1,10 @@
+function includes(list, value) {
+  if (!Array.isArray(list)) {
+    return false
+  }
+  return list.indexOf(value) >= 0
+}
+
+module.exports = {
+  includes: includes,
+}

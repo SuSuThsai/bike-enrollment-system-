@@ -1,0 +1,42 @@
+{
+  "pages": [
+    "pages/event-list/index",
+    "pages/event-detail/index",
+    "pages/enroll-form/index",
+    "pages/payment-result/index",
+    "pages/my-enrollments/index"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#065f46",
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "骑行赛事",
+    "backgroundColor": "#f8fafc",
+    "backgroundTextStyle": "dark"
+  },
+  "tabBar": {
+    "color": "#334155",
+    "selectedColor": "#047857",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/event-list/index",
+        "text": "赛事",
+        "iconPath": "assets/tabbar/events.png",
+        "selectedIconPath": "assets/tabbar/events-active.png"
+      },
+      {
+        "pagePath": "pages/my-enrollments/index",
+        "text": "我的报名",
+        "iconPath": "assets/tabbar/mine.png",
+        "selectedIconPath": "assets/tabbar/mine-active.png"
+      }
+    ]
+  },
+  "networkTimeout": {
+    "request": 15000
+  },
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents",
+  "sitemapLocation": "sitemap.json"
+}

@@ -1,0 +1,55 @@
+# ===== 环境变量（模板 .env.example 必须入库）=====
+.env
+.env.local
+.env.*.local
+.env.*
+!.env.example
+
+# ===== 证书 / 私钥（放入 server/configs/，永不提交）=====
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.keystore
+configs/*.pem
+configs/*.key
+configs/*.p12
+configs/*.pfx
+
+# ===== 日志 =====
+*.log
+logs/
+
+# ===== 数据库导出（迁移脚本为唯一例外，见文件末尾）=====
+*.sql
+*.dump
+*.sqlite
+*.db
+
+# ===== 依赖与构建产物 =====
+node_modules/
+dist/
+dist-ssr/
+.vite/
+build/
+bin/
+*.exe
+*.test
+*.out
+
+# ===== 压测产物（体积大、可重新生成）=====
+tests/load/results/
+
+# ===== 临时文件 / 编辑器 =====
+tmp/
+.data/
+*.local
+.DS_Store
+.idea/
+.vscode/
+
+# ===== 例外：数据库迁移脚本必须入库，否则 schema 丢失 =====
+!server/migrations/*.sql

@@ -1,0 +1,16 @@
+# 依赖与构建产物
+node_modules/
+dist/
+dist-ssr/
+.vite/
+
+# 本地环境变量
+.env
+.env.*
+!.env.example
+
+# 本地缓存 / 编辑器
+*.local
+.DS_Store
+.idea/
+.vscode/

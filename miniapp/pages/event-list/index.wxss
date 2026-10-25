@@ -1,0 +1,120 @@
+.hero {
+  border-radius: 0 0 32rpx 32rpx;
+}
+
+.hero-kicker {
+  color: #6ee7b7;
+  font-size: 22rpx;
+  font-weight: 700;
+  letter-spacing: 4rpx;
+}
+
+.filters {
+  width: 100%;
+  margin: 8rpx 0 24rpx;
+}
+
+.filter-chip {
+  margin-right: 16rpx;
+}
+
+.list {
+  padding-bottom: 24rpx;
+}
+
+.event-card {
+  border-left: 8rpx solid #047857;
+  box-shadow: 0 10rpx 28rpx rgba(15, 23, 42, 0.08);
+}
+
+.card-hover {
+  background: #f8fafc;
+}
+
+.event-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.event-title {
+  flex: 1;
+  color: #0f172a;
+  font-size: 36rpx;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.event-meta {
+  margin-top: 22rpx;
+  padding: 18rpx;
+  border-radius: 14rpx;
+  background: #f8fafc;
+}
+
+.meta-row {
+  display: flex;
+  gap: 16rpx;
+  margin-bottom: 8rpx;
+  color: #1e293b;
+  font-size: 27rpx;
+}
+
+.meta-row:last-child {
+  margin-bottom: 0;
+}
+
+.meta-label {
+  min-width: 70rpx;
+  color: #475569;
+  font-weight: 600;
+}
+
+.deadline-soon {
+  color: #e11d48;
+  font-weight: 700;
+}
+
+.deadline-tag {
+  margin-left: 8rpx;
+  padding: 2rpx 10rpx;
+  border-radius: 999rpx;
+  background: #ffe4e6;
+  color: #be123c;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.event-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-top: 22rpx;
+  padding-top: 20rpx;
+  border-top: 2rpx solid #e2e8f0;
+}
+
+.detail-link {
+  color: #065f46;
+  font-size: 28rpx;
+  font-weight: 700;
+}
+
+.retry-btn {
+  margin-top: 24rpx;
+}
+
+.empty-title {
+  margin: 16rpx 0 8rpx;
+  color: #0f172a;
+  font-size: 34rpx;
+  font-weight: 700;
+}
+
+.list-end {
+  padding: 24rpx;
+  text-align: center;
+  color: #475569;
+  font-size: 24rpx;
+}

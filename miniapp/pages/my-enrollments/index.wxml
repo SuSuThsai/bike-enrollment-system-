@@ -1,0 +1,50 @@
+<view class="page">
+  <view class="my-header">
+    <view class="my-title">我的报名</view>
+    <view class="muted">下拉刷新报名状态</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="list">
+    <view wx:for="{{skeletons}}" wx:key="*this" class="skeleton" />
+  </view>
+
+  <view wx:elif="{{error}}" class="error-box">
+    <view>{{error}}</view>
+    <button class="secondary-btn retry-btn" bindtap="retry">重新加载</button>
+  </view>
+
+  <view wx:elif="{{items.length === 0}}" class="empty">
+    <view class="empty-icon">📝</view>
+    <view class="empty-title">还没有报名记录</view>
+    <view class="tiny">去赛事列表看看，选择组别开始报名。</view>
+    <button class="primary-btn empty-action" bindtap="goEvents">浏览赛事</button>
+  </view>
+
+  <view wx:else class="list">
+    <view wx:for="{{items}}" wx:key="id" class="card enrollment-card">
+      <view class="row">
+        <view class="enrollment-title">报名 {{item.id}}</view>
+        <view class="status-pill status-{{item.statusTone}}">{{item.statusText}}</view>
+      </view>
+      <view class="enrollment-meta">
+        <view class="meta-line"><text class="meta-label">赛事</text><text class="mono">{{item.event_id}}</text></view>
+        <view class="meta-line"><text class="meta-label">组别</text><text class="mono">{{item.group_id}}</text></view>
+        <view class="meta-line"><text class="meta-label">报名时间</text><text>{{item.createdText}}</text></view>
+        <view wx:if="{{item.order_id}}" class="meta-line"><text class="meta-label">订单</text><text class="mono">{{item.order_id}}</text></view>
+      </view>
+
+      <button
+        wx:if="{{item.canPay}}"
+        class="primary-btn pay-btn"
+        data-order-id="{{item.order_id}}"
+        loading="{{payingOrderId === item.order_id}}"
+        disabled="{{payingOrderId}}"
+        bindtap="payPending"
+      >继续支付</button>
+    </view>
+
+    <view class="notice">
+      报名状态以服务端记录为准；支付完成后如状态未更新，请稍后下拉刷新。
+    </view>
+  </view>
+</view>

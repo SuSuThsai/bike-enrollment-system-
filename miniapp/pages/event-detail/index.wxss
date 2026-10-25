@@ -1,0 +1,115 @@
+.hero-skeleton {
+  height: 360rpx;
+  margin: -24rpx -24rpx 24rpx;
+  border-radius: 0 0 32rpx 32rpx;
+}
+
+.detail-hero {
+  border-radius: 0 0 32rpx 32rpx;
+}
+
+.detail-title {
+  margin-top: 22rpx;
+}
+
+.detail-meta {
+  margin-top: 26rpx;
+  padding: 20rpx;
+  border-radius: 16rpx;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.detail-meta .meta-row {
+  color: #ffffff;
+}
+
+.detail-meta .meta-label {
+  color: #a7f3d0;
+}
+
+.detail-meta .meta-row.deadline-soon {
+  color: #fecdd3;
+  font-weight: 700;
+}
+
+.deadline-tag {
+  margin-left: 8rpx;
+  padding: 2rpx 10rpx;
+  border-radius: 999rpx;
+  background: rgba(225, 29, 72, 0.28);
+  color: #ffe4e6;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.hero-price {
+  color: #fde68a;
+  font-weight: 700;
+}
+
+.body-text {
+  color: #1e293b;
+  font-size: 29rpx;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+.group-heading {
+  margin-top: 12rpx;
+}
+
+.group-card {
+  border: 2rpx solid #cbd5e1;
+  transition: border-color 0.2s;
+}
+
+.group-card.selected {
+  border-color: #047857;
+  background: #f0fdf4;
+}
+
+.group-name {
+  color: #0f172a;
+  font-size: 34rpx;
+  font-weight: 700;
+}
+
+.group-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx 24rpx;
+  margin-top: 16rpx;
+  color: #475569;
+  font-size: 26rpx;
+}
+
+.group-price-row {
+  margin-top: 18rpx;
+  padding-top: 16rpx;
+  border-top: 2rpx solid #e2e8f0;
+}
+
+.select-hint {
+  color: #065f46;
+  font-size: 26rpx;
+  font-weight: 700;
+}
+
+.disclaimer-note {
+  margin-top: 12rpx;
+}
+
+.bottom-price {
+  flex: 0 0 auto;
+  min-width: 180rpx;
+}
+
+.bottom-amount {
+  color: #b45309;
+  font-size: 34rpx;
+  font-weight: 700;
+}
+
+.retry-btn {
+  margin-top: 24rpx;
+}

@@ -1,0 +1,13 @@
+{
+  "name": "bike-enroll-screenshots",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Playwright 截图脚本：输出官网与管理后台截图到 docs/screenshots/",
+  "scripts": {
+    "shots": "node screenshot.js"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
+  }
+}

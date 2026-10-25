@@ -1,0 +1,177 @@
+<wxs src="../../utils/form.wxs" module="formUtil" />
+
+<view wx:if="{{loading}}" class="page">
+  <view class="skeleton" />
+  <view class="skeleton" />
+  <view class="skeleton" />
+</view>
+
+<view wx:elif="{{event && group}}" class="page page-with-bottom">
+  <view class="card summary-card">
+    <view class="row-start">
+      <view class="summary-main">
+        <view class="tiny">{{event.title}}</view>
+        <view class="title summary-title">{{group.name}}</view>
+        <view class="muted">{{group.startText}}</view>
+      </view>
+      <view class="price">{{group.priceText}}</view>
+    </view>
+    <view class="summary-meta">
+      <text>剩余名额 {{group.remaining_slots}}/{{group.total_slots}}</text>
+      <text>免责协议 {{disclaimerVersion}}</text>
+    </view>
+  </view>
+
+  <view wx:if="{{!eventOpen}}" class="lock-banner warn">{{registrationHint || '报名暂未开放'}}</view>
+  <view wx:elif="{{lockLoading}}" class="lock-banner">正在锁定名额…</view>
+  <view wx:elif="{{lockError}}" class="lock-banner warn">
+    <view>{{lockError}}</view>
+    <button class="link-btn" bindtap="retryLock">重新锁定</button>
+  </view>
+  <view wx:else class="lock-banner">{{lockUntilText || '名额已锁定'}}</view>
+
+  <view wx:if="{{draftRestored}}" class="notice draft-notice">
+    已恢复本地暂存草稿。提交成功前会持续保存在本机。
+  </view>
+
+  <view wx:if="{{formError}}" class="error-box form-error">{{formError}}</view>
+
+  <view class="card form-card">
+    <view class="section-title">报名信息</view>
+    <view wx:if="{{fields.length === 0}}" class="notice">
+      该组别暂未配置动态表单字段，可直接提交报名。
+    </view>
+
+    <view wx:for="{{fields}}" wx:key="name" id="field-{{index}}" class="field">
+      <view class="field-label-row">
+        <view class="field-label">{{item.label}}</view>
+        <view wx:if="{{item.required}}" class="required">*</view>
+      </view>
+
+      <input
+        wx:if="{{item.type === 'text' || item.type === 'phone' || item.type === 'mobile' || item.type === 'id_card' || item.type === 'idcard' || item.type === 'number'}}"
+        class="input"
+        type="{{item.inputType}}"
+        value="{{item.value}}"
+        maxlength="{{item.maxlength}}"
+        placeholder="{{item.placeholder}}"
+        placeholder-class="placeholder"
+        data-index="{{index}}"
+        bindinput="onInput"
+      />
+
+      <textarea
+        wx:elif="{{item.type === 'textarea'}}"
+        class="textarea"
+        value="{{item.value}}"
+        maxlength="{{item.maxlength}}"
+        placeholder="{{item.placeholder}}"
+        placeholder-class="placeholder"
+        data-index="{{index}}"
+        bindinput="onInput"
+      />
+
+      <picker
+        wx:elif="{{item.type === 'select'}}"
+        mode="selector"
+        range="{{item.options}}"
+        range-key="label"
+        value="{{item.selectedIndex}}"
+        data-index="{{index}}"
+        bindchange="onSelect"
+      >
+        <view class="picker-value {{item.displayValue ? '' : 'placeholder'}}">
+          {{item.displayValue || item.selectPlaceholder}}
+        </view>
+      </picker>
+
+      <radio-group
+        wx:elif="{{item.type === 'radio'}}"
+        class="option-row"
+        data-index="{{index}}"
+        bindchange="onRadio"
+      >
+        <label
+          wx:for="{{item.options}}"
+          wx:for-item="option"
+          wx:for-index="optionIndex"
+          wx:key="value"
+          class="option-item {{item.value === option.value ? 'checked' : ''}}"
+        >
+          <radio value="{{option.value}}" checked="{{item.value === option.value}}" color="#047857" />
+          <text>{{option.label}}</text>
+        </label>
+      </radio-group>
+
+      <checkbox-group
+        wx:elif="{{item.type === 'checkbox'}}"
+        class="option-row"
+        data-index="{{index}}"
+        bindchange="onCheckbox"
+      >
+        <label
+          wx:for="{{item.options}}"
+          wx:for-item="option"
+          wx:for-index="optionIndex"
+          wx:key="value"
+          class="option-item {{formUtil.includes(item.value, option.value) ? 'checked' : ''}}"
+        >
+          <checkbox value="{{option.value}}" checked="{{formUtil.includes(item.value, option.value)}}" color="#047857" />
+          <text>{{option.label}}</text>
+        </label>
+      </checkbox-group>
+
+      <picker
+        wx:elif="{{item.type === 'date'}}"
+        mode="date"
+        value="{{item.value}}"
+        data-index="{{index}}"
+        bindchange="onDate"
+      >
+        <view class="picker-value {{item.value ? '' : 'placeholder'}}">
+          {{item.value || '请选择日期'}}
+        </view>
+      </picker>
+
+      <input
+        wx:else
+        class="input"
+        value="{{item.value}}"
+        maxlength="{{item.maxlength}}"
+        placeholder="{{item.placeholder}}"
+        placeholder-class="placeholder"
+        data-index="{{index}}"
+        bindinput="onInput"
+      />
+    </view>
+  </view>
+
+  <view class="card disclaimer-card">
+    <view class="section-title">免责协议</view>
+    <view class="notice">
+      提交报名即表示你已阅读并同意该组别《免责协议》版本 {{disclaimerVersion}}。
+      签署时间、版本号会随报名一并记录。
+    </view>
+    <checkbox-group bindchange="onDisclaimerChange">
+      <label class="disclaimer-row">
+        <checkbox value="accepted" checked="{{disclaimerAccepted}}" color="#047857" />
+        <text>我已阅读并同意免责协议</text>
+      </label>
+    </checkbox-group>
+  </view>
+
+  <view wx:if="{{draftSaved}}" class="tiny draft-saved">草稿已自动保存到本机</view>
+
+  <view class="bottom-bar">
+    <button
+      class="primary-btn"
+      loading="{{submitting}}"
+      disabled="{{submitting || !hasLock || lockLoading || !eventOpen}}"
+      bindtap="submit"
+    >{{submitting ? '提交中…' : (eventOpen ? '提交并支付' : '报名暂未开放')}}</button>
+  </view>
+</view>
+
+<view wx:else class="page">
+  <view class="error-box">{{formError || '报名信息加载失败'}}</view>
+</view>

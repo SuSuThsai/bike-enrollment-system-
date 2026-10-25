@@ -1,0 +1,18 @@
+# 本地构建产物
+bin/
+*.exe
+*.test
+*.out
+
+# 本地环境变量与密钥
+.env
+.env.*
+configs/*.pem
+configs/*.key
+
+# 文档与编辑器
+README.md
+.idea/
+.vscode/
+.git/
+.gitignore

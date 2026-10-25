@@ -1,0 +1,1017 @@
+{
+  "doc": "docs/state-machine.md",
+  "generated_at": "2026-10-25 14:20:26 +0800",
+  "scope": "full（含标注为“迭代二”的迁移边）",
+  "summary": {
+    "machines": 3,
+    "states": 17,
+    "events": 14,
+    "combos": 84,
+    "legal": 15,
+    "rejected": 69,
+    "deadlocks": [],
+    "unreachable": [],
+    "warnings": [],
+    "infos": []
+  },
+  "machines": [
+    {
+      "name": "Lock",
+      "heading": "三、Lock 状态机",
+      "doc_line": 62,
+      "states": [
+        "（无）",
+        "active",
+        "consumed",
+        "expired"
+      ],
+      "terminal": {
+        "consumed": 71,
+        "expired": 71
+      },
+      "events": [
+        {
+          "id": "E1",
+          "text": "POST /enrollments/lock 且 Redis Lua 原子扣减成功",
+          "doc_line": 68
+        },
+        {
+          "id": "E2",
+          "text": "POST /enrollments 提交成功",
+          "doc_line": 69
+        },
+        {
+          "id": "E3",
+          "text": "定时任务扫描到 expires_at <= now",
+          "doc_line": 70
+        }
+      ],
+      "combos": 12,
+      "legal": [
+        {
+          "from": "（无）",
+          "event_id": "E1",
+          "event": "POST /enrollments/lock 且 Redis Lua 原子扣减成功",
+          "to": [
+            "active"
+          ],
+          "lines": [
+            68
+          ],
+          "idem": "lock_token",
+          "actor": "报名接口",
+          "effect": "写 enrollment_locks，expires_at = now + 15min；写 lock:{token} 辅助 TTL",
+          "future": false
+        },
+        {
+          "from": "active",
+          "event_id": "E2",
+          "event": "POST /enrollments 提交成功",
+          "to": [
+            "consumed"
+          ],
+          "lines": [
+            69
+          ],
+          "idem": "lock_token",
+          "actor": "报名接口",
+          "effect": "事务内条件更新为 consumed，不碰 Redis",
+          "future": false
+        },
+        {
+          "from": "active",
+          "event_id": "E3",
+          "event": "定时任务扫描到 expires_at <= now",
+          "to": [
+            "expired"
+          ],
+          "lines": [
+            70
+          ],
+          "idem": "lock_token",
+          "actor": "Lock 过期任务（每分钟）",
+          "effect": "仅当 affected_rows = 1 时 INCR group:{group_id}:remaining",
+          "future": false
+        }
+      ],
+      "rejected": [
+        {
+          "from": "（无）",
+          "event_id": "E2",
+          "event": "POST /enrollments 提交成功",
+          "code": "R3",
+          "reason": "实体不存在，事件无作用对象",
+          "note": ""
+        },
+        {
+          "from": "（无）",
+          "event_id": "E3",
+          "event": "定时任务扫描到 expires_at <= now",
+          "code": "R3",
+          "reason": "实体不存在，事件无作用对象",
+          "note": ""
+        },
+        {
+          "from": "active",
+          "event_id": "E1",
+          "event": "POST /enrollments/lock 且 Redis Lua 原子扣减成功",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "consumed",
+          "event_id": "E1",
+          "event": "POST /enrollments/lock 且 Redis Lua 原子扣减成功",
+          "code": "R1",
+          "reason": "终态不可迁出（L71）",
+          "note": ""
+        },
+        {
+          "from": "consumed",
+          "event_id": "E2",
+          "event": "POST /enrollments 提交成功",
+          "code": "R1",
+          "reason": "终态不可迁出（L71）",
+          "note": "UPDATE ... WHERE status='active' AND expires_at > NOW() 命中 0 行 → 返回 LOCK_EXPIRED，不创建 Enrollment（§3.3 提交报名伪代码）"
+        },
+        {
+          "from": "consumed",
+          "event_id": "E3",
+          "event": "定时任务扫描到 expires_at <= now",
+          "code": "R1",
+          "reason": "终态不可迁出（L71）",
+          "note": "扫描条件 WHERE status='active'，命中 0 行 → 跳过，不回补 Redis（§3.4 Lock 过期任务伪代码）"
+        },
+        {
+          "from": "expired",
+          "event_id": "E1",
+          "event": "POST /enrollments/lock 且 Redis Lua 原子扣减成功",
+          "code": "R1",
+          "reason": "终态不可迁出（L71）",
+          "note": ""
+        },
+        {
+          "from": "expired",
+          "event_id": "E2",
+          "event": "POST /enrollments 提交成功",
+          "code": "R1",
+          "reason": "终态不可迁出（L71）",
+          "note": "UPDATE ... WHERE status='active' AND expires_at > NOW() 命中 0 行 → 返回 LOCK_EXPIRED，不创建 Enrollment（§3.3 提交报名伪代码）"
+        },
+        {
+          "from": "expired",
+          "event_id": "E3",
+          "event": "定时任务扫描到 expires_at <= now",
+          "code": "R1",
+          "reason": "终态不可迁出（L71）",
+          "note": "扫描条件 WHERE status='active'，命中 0 行 → 跳过，不回补 Redis（§3.4 Lock 过期任务伪代码）"
+        }
+      ],
+      "deadlocks": [],
+      "unreachable": [],
+      "out_degree": {
+        "（无）": 1,
+        "active": 2,
+        "consumed": 0,
+        "expired": 0
+      },
+      "shortest_paths": {
+        "active": "（无） -E1-> active",
+        "consumed": "（无） -E1-> active -E2-> consumed",
+        "expired": "（无） -E1-> active -E3-> expired",
+        "（无）": "（无）"
+      }
+    },
+    {
+      "name": "Order",
+      "heading": "四、Order 状态机",
+      "doc_line": 165,
+      "states": [
+        "（无）",
+        "pending_payment",
+        "paid",
+        "expired",
+        "refunding",
+        "refunded",
+        "refund_failed"
+      ],
+      "terminal": {
+        "refunded": 177,
+        "refund_failed": 178,
+        "expired": 179
+      },
+      "events": [
+        {
+          "id": "E1",
+          "text": "提交报名成功",
+          "doc_line": 171
+        },
+        {
+          "id": "E2",
+          "text": "微信支付回调（验签通过、金额一致）",
+          "doc_line": 172
+        },
+        {
+          "id": "E3",
+          "text": "定时任务扫描到 created_at + 15min < now",
+          "doc_line": 173
+        },
+        {
+          "id": "E4",
+          "text": "退款申请受理",
+          "doc_line": 174
+        },
+        {
+          "id": "E5",
+          "text": "退款回调 REFUND.SUCCESS",
+          "doc_line": 175
+        },
+        {
+          "id": "E6",
+          "text": "退款回调 REFUND.CLOSED / REFUND.ABNORMAL",
+          "doc_line": 176
+        }
+      ],
+      "combos": 42,
+      "legal": [
+        {
+          "from": "（无）",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "to": [
+            "pending_payment"
+          ],
+          "lines": [
+            171
+          ],
+          "idem": "order_id",
+          "actor": "报名接口",
+          "effect": "与 Enrollment 同事务创建",
+          "future": false
+        },
+        {
+          "from": "pending_payment",
+          "event_id": "E2",
+          "event": "微信支付回调（验签通过、金额一致）",
+          "to": [
+            "paid"
+          ],
+          "lines": [
+            172
+          ],
+          "idem": "微信 transaction_id",
+          "actor": "支付回调",
+          "effect": "同事务内 Enrollment→paid；不碰 Redis",
+          "future": false
+        },
+        {
+          "from": "pending_payment",
+          "event_id": "E3",
+          "event": "定时任务扫描到 created_at + 15min < now",
+          "to": [
+            "expired"
+          ],
+          "lines": [
+            173
+          ],
+          "idem": "order_id",
+          "actor": "支付超时任务（每分钟）",
+          "effect": "同事务内 Enrollment→cancelled；Redis INCR 回补",
+          "future": false
+        },
+        {
+          "from": "paid",
+          "event_id": "E4",
+          "event": "退款申请受理",
+          "to": [
+            "refunding"
+          ],
+          "lines": [
+            174
+          ],
+          "idem": "out_refund_no",
+          "actor": "退款接口",
+          "effect": "创建 refunds 记录；Order→refunding；**不碰 Redis**",
+          "future": false
+        },
+        {
+          "from": "refunding",
+          "event_id": "E5",
+          "event": "退款回调 REFUND.SUCCESS",
+          "to": [
+            "refunded"
+          ],
+          "lines": [
+            175
+          ],
+          "idem": "refund_id",
+          "actor": "退款回调",
+          "effect": "同事务内 Enrollment→refunded；Order 条件更新 affected_rows=1 时 Redis INCR **恰好一次**",
+          "future": false
+        },
+        {
+          "from": "refunding",
+          "event_id": "E6",
+          "event": "退款回调 REFUND.CLOSED / REFUND.ABNORMAL",
+          "to": [
+            "refund_failed"
+          ],
+          "lines": [
+            176
+          ],
+          "idem": "refund_id",
+          "actor": "退款回调",
+          "effect": "更新 refunds.status 与 Order；Enrollment 不变；**不碰 Redis**",
+          "future": false
+        }
+      ],
+      "rejected": [
+        {
+          "from": "（无）",
+          "event_id": "E2",
+          "event": "微信支付回调（验签通过、金额一致）",
+          "code": "R3",
+          "reason": "实体不存在，事件无作用对象",
+          "note": ""
+        },
+        {
+          "from": "（无）",
+          "event_id": "E3",
+          "event": "定时任务扫描到 created_at + 15min < now",
+          "code": "R3",
+          "reason": "实体不存在，事件无作用对象",
+          "note": ""
+        },
+        {
+          "from": "（无）",
+          "event_id": "E4",
+          "event": "退款申请受理",
+          "code": "R3",
+          "reason": "实体不存在，事件无作用对象",
+          "note": ""
+        },
+        {
+          "from": "（无）",
+          "event_id": "E5",
+          "event": "退款回调 REFUND.SUCCESS",
+          "code": "R3",
+          "reason": "实体不存在，事件无作用对象",
+          "note": ""
+        },
+        {
+          "from": "（无）",
+          "event_id": "E6",
+          "event": "退款回调 REFUND.CLOSED / REFUND.ABNORMAL",
+          "code": "R3",
+          "reason": "实体不存在，事件无作用对象",
+          "note": ""
+        },
+        {
+          "from": "pending_payment",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "pending_payment",
+          "event_id": "E4",
+          "event": "退款申请受理",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "pending_payment",
+          "event_id": "E5",
+          "event": "退款回调 REFUND.SUCCESS",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "pending_payment",
+          "event_id": "E6",
+          "event": "退款回调 REFUND.CLOSED / REFUND.ABNORMAL",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "paid",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "paid",
+          "event_id": "E2",
+          "event": "微信支付回调（验签通过、金额一致）",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": "重复回调：事务内先查状态，非 pending_payment 直接 COMMIT 返回 200，不 UPDATE、不碰 Redis（§4.2 支付回调伪代码 步骤 2）"
+        },
+        {
+          "from": "paid",
+          "event_id": "E3",
+          "event": "定时任务扫描到 created_at + 15min < now",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": "更新条件 WHERE status='pending_payment'，affected_rows=0 后跳过，不回补 Redis（§4.3 支付超时任务伪代码）"
+        },
+        {
+          "from": "paid",
+          "event_id": "E5",
+          "event": "退款回调 REFUND.SUCCESS",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "paid",
+          "event_id": "E6",
+          "event": "退款回调 REFUND.CLOSED / REFUND.ABNORMAL",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "expired",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "code": "R1",
+          "reason": "终态不可迁出（L179）",
+          "note": ""
+        },
+        {
+          "from": "expired",
+          "event_id": "E2",
+          "event": "微信支付回调（验签通过、金额一致）",
+          "code": "R1",
+          "reason": "终态不可迁出（L179）",
+          "note": "重复回调：事务内先查状态，非 pending_payment 直接 COMMIT 返回 200，不 UPDATE、不碰 Redis（§4.2 支付回调伪代码 步骤 2）"
+        },
+        {
+          "from": "expired",
+          "event_id": "E3",
+          "event": "定时任务扫描到 created_at + 15min < now",
+          "code": "R1",
+          "reason": "终态不可迁出（L179）",
+          "note": "更新条件 WHERE status='pending_payment'，affected_rows=0 后跳过，不回补 Redis（§4.3 支付超时任务伪代码）"
+        },
+        {
+          "from": "expired",
+          "event_id": "E4",
+          "event": "退款申请受理",
+          "code": "R1",
+          "reason": "终态不可迁出（L179）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "expired",
+          "event_id": "E5",
+          "event": "退款回调 REFUND.SUCCESS",
+          "code": "R1",
+          "reason": "终态不可迁出（L179）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "expired",
+          "event_id": "E6",
+          "event": "退款回调 REFUND.CLOSED / REFUND.ABNORMAL",
+          "code": "R1",
+          "reason": "终态不可迁出（L179）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "refunding",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "refunding",
+          "event_id": "E2",
+          "event": "微信支付回调（验签通过、金额一致）",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "refunding",
+          "event_id": "E3",
+          "event": "定时任务扫描到 created_at + 15min < now",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "refunding",
+          "event_id": "E4",
+          "event": "退款申请受理",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "refunded",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "code": "R1",
+          "reason": "终态不可迁出（L177）",
+          "note": ""
+        },
+        {
+          "from": "refunded",
+          "event_id": "E2",
+          "event": "微信支付回调（验签通过、金额一致）",
+          "code": "R1",
+          "reason": "终态不可迁出（L177）",
+          "note": "重复回调：事务内先查状态，非 pending_payment 直接 COMMIT 返回 200，不 UPDATE、不碰 Redis（§4.2 支付回调伪代码 步骤 2）"
+        },
+        {
+          "from": "refunded",
+          "event_id": "E3",
+          "event": "定时任务扫描到 created_at + 15min < now",
+          "code": "R1",
+          "reason": "终态不可迁出（L177）",
+          "note": "更新条件 WHERE status='pending_payment'，affected_rows=0 后跳过，不回补 Redis（§4.3 支付超时任务伪代码）"
+        },
+        {
+          "from": "refunded",
+          "event_id": "E4",
+          "event": "退款申请受理",
+          "code": "R1",
+          "reason": "终态不可迁出（L177）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "refunded",
+          "event_id": "E5",
+          "event": "退款回调 REFUND.SUCCESS",
+          "code": "R1",
+          "reason": "终态不可迁出（L177）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "refunded",
+          "event_id": "E6",
+          "event": "退款回调 REFUND.CLOSED / REFUND.ABNORMAL",
+          "code": "R1",
+          "reason": "终态不可迁出（L177）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "refund_failed",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "code": "R1",
+          "reason": "终态不可迁出（L178）",
+          "note": ""
+        },
+        {
+          "from": "refund_failed",
+          "event_id": "E2",
+          "event": "微信支付回调（验签通过、金额一致）",
+          "code": "R1",
+          "reason": "终态不可迁出（L178）",
+          "note": ""
+        },
+        {
+          "from": "refund_failed",
+          "event_id": "E3",
+          "event": "定时任务扫描到 created_at + 15min < now",
+          "code": "R1",
+          "reason": "终态不可迁出（L178）",
+          "note": ""
+        },
+        {
+          "from": "refund_failed",
+          "event_id": "E4",
+          "event": "退款申请受理",
+          "code": "R1",
+          "reason": "终态不可迁出（L178）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "refund_failed",
+          "event_id": "E5",
+          "event": "退款回调 REFUND.SUCCESS",
+          "code": "R1",
+          "reason": "终态不可迁出（L178）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        },
+        {
+          "from": "refund_failed",
+          "event_id": "E6",
+          "event": "退款回调 REFUND.CLOSED / REFUND.ABNORMAL",
+          "code": "R1",
+          "reason": "终态不可迁出（L178）",
+          "note": "退款只允许 paid→refunding；refunding 收到 REFUND.SUCCESS 才进入 refunded 并回补 Redis，REFUND.CLOSED/ABNORMAL 进入 refund_failed；其它状态拒绝或幂等返回，不回补（§4.4 退款流程伪代码）"
+        }
+      ],
+      "deadlocks": [],
+      "unreachable": [],
+      "out_degree": {
+        "（无）": 1,
+        "pending_payment": 2,
+        "paid": 1,
+        "expired": 0,
+        "refunding": 2,
+        "refunded": 0,
+        "refund_failed": 0
+      },
+      "shortest_paths": {
+        "pending_payment": "（无） -E1-> pending_payment",
+        "paid": "（无） -E1-> pending_payment -E2-> paid",
+        "expired": "（无） -E1-> pending_payment -E3-> expired",
+        "refunding": "（无） -E1-> pending_payment -E2-> paid -E4-> refunding",
+        "refunded": "（无） -E1-> pending_payment -E2-> paid -E4-> refunding -E5-> refunded",
+        "refund_failed": "（无） -E1-> pending_payment -E2-> paid -E4-> refunding -E6-> refund_failed",
+        "（无）": "（无）"
+      }
+    },
+    {
+      "name": "Enrollment",
+      "heading": "五、Enrollment 状态机",
+      "doc_line": 335,
+      "states": [
+        "（无）",
+        "pending_payment",
+        "paid",
+        "cancelled",
+        "confirmed",
+        "refunded"
+      ],
+      "terminal": {
+        "cancelled": 347,
+        "refunded": 347
+      },
+      "events": [
+        {
+          "id": "E1",
+          "text": "提交报名成功",
+          "doc_line": 341
+        },
+        {
+          "id": "E2",
+          "text": "支付回调（与 Order 同事务）",
+          "doc_line": 342
+        },
+        {
+          "id": "E3",
+          "text": "支付超时（与 Order 同事务）",
+          "doc_line": 343
+        },
+        {
+          "id": "E4",
+          "text": "审核通过（MVP 自动确认）",
+          "doc_line": 344
+        },
+        {
+          "id": "E5",
+          "text": "退款成功（Order 同事务联动）",
+          "doc_line": 345
+        }
+      ],
+      "combos": 30,
+      "legal": [
+        {
+          "from": "（无）",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "to": [
+            "pending_payment"
+          ],
+          "lines": [
+            341
+          ],
+          "idem": "enrollment_id",
+          "actor": "报名接口",
+          "effect": "与 Order 同事务创建",
+          "future": false
+        },
+        {
+          "from": "pending_payment",
+          "event_id": "E2",
+          "event": "支付回调（与 Order 同事务）",
+          "to": [
+            "paid"
+          ],
+          "lines": [
+            342
+          ],
+          "idem": "微信 transaction_id",
+          "actor": "支付回调",
+          "effect": "仅由 Order 迁移驱动",
+          "future": false
+        },
+        {
+          "from": "pending_payment",
+          "event_id": "E3",
+          "event": "支付超时（与 Order 同事务）",
+          "to": [
+            "cancelled"
+          ],
+          "lines": [
+            343
+          ],
+          "idem": "order_id",
+          "actor": "支付超时任务",
+          "effect": "仅由 Order 迁移驱动",
+          "future": false
+        },
+        {
+          "from": "paid",
+          "event_id": "E4",
+          "event": "审核通过（MVP 自动确认）",
+          "to": [
+            "confirmed"
+          ],
+          "lines": [
+            344
+          ],
+          "idem": "enrollment_id",
+          "actor": "后台或确认任务",
+          "effect": "条件更新 WHERE status='paid'，重复执行无副作用",
+          "future": false
+        },
+        {
+          "from": "paid",
+          "event_id": "E5",
+          "event": "退款成功（Order 同事务联动）",
+          "to": [
+            "refunded"
+          ],
+          "lines": [
+            345
+          ],
+          "idem": "refund_id",
+          "actor": "退款回调",
+          "effect": "仅由 Order refunded 驱动；名额回补由 Order 退款事务统一执行",
+          "future": false
+        },
+        {
+          "from": "confirmed",
+          "event_id": "E5",
+          "event": "退款成功（Order 同事务联动）",
+          "to": [
+            "refunded"
+          ],
+          "lines": [
+            346
+          ],
+          "idem": "refund_id",
+          "actor": "退款回调",
+          "effect": "仅由 Order refunded 驱动；名额回补由 Order 退款事务统一执行",
+          "future": false
+        }
+      ],
+      "rejected": [
+        {
+          "from": "（无）",
+          "event_id": "E2",
+          "event": "支付回调（与 Order 同事务）",
+          "code": "R3",
+          "reason": "实体不存在，事件无作用对象",
+          "note": ""
+        },
+        {
+          "from": "（无）",
+          "event_id": "E3",
+          "event": "支付超时（与 Order 同事务）",
+          "code": "R3",
+          "reason": "实体不存在，事件无作用对象",
+          "note": ""
+        },
+        {
+          "from": "（无）",
+          "event_id": "E4",
+          "event": "审核通过（MVP 自动确认）",
+          "code": "R3",
+          "reason": "实体不存在，事件无作用对象",
+          "note": ""
+        },
+        {
+          "from": "（无）",
+          "event_id": "E5",
+          "event": "退款成功（Order 同事务联动）",
+          "code": "R3",
+          "reason": "实体不存在，事件无作用对象",
+          "note": ""
+        },
+        {
+          "from": "pending_payment",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "pending_payment",
+          "event_id": "E4",
+          "event": "审核通过（MVP 自动确认）",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "pending_payment",
+          "event_id": "E5",
+          "event": "退款成功（Order 同事务联动）",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": "退款只允许 paid/confirmed→refunded，且必须由 Order refunded 事务联动；其它状态拒绝，避免重复回补（§5.3 退款联动要求）"
+        },
+        {
+          "from": "paid",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "paid",
+          "event_id": "E2",
+          "event": "支付回调（与 Order 同事务）",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "paid",
+          "event_id": "E3",
+          "event": "支付超时（与 Order 同事务）",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "cancelled",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "code": "R1",
+          "reason": "终态不可迁出（L347）",
+          "note": ""
+        },
+        {
+          "from": "cancelled",
+          "event_id": "E2",
+          "event": "支付回调（与 Order 同事务）",
+          "code": "R1",
+          "reason": "终态不可迁出（L347）",
+          "note": ""
+        },
+        {
+          "from": "cancelled",
+          "event_id": "E3",
+          "event": "支付超时（与 Order 同事务）",
+          "code": "R1",
+          "reason": "终态不可迁出（L347）",
+          "note": ""
+        },
+        {
+          "from": "cancelled",
+          "event_id": "E4",
+          "event": "审核通过（MVP 自动确认）",
+          "code": "R1",
+          "reason": "终态不可迁出（L347）",
+          "note": ""
+        },
+        {
+          "from": "cancelled",
+          "event_id": "E5",
+          "event": "退款成功（Order 同事务联动）",
+          "code": "R1",
+          "reason": "终态不可迁出（L347）",
+          "note": "退款只允许 paid/confirmed→refunded，且必须由 Order refunded 事务联动；其它状态拒绝，避免重复回补（§5.3 退款联动要求）"
+        },
+        {
+          "from": "confirmed",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "confirmed",
+          "event_id": "E2",
+          "event": "支付回调（与 Order 同事务）",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "confirmed",
+          "event_id": "E3",
+          "event": "支付超时（与 Order 同事务）",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "confirmed",
+          "event_id": "E4",
+          "event": "审核通过（MVP 自动确认）",
+          "code": "R2",
+          "reason": "迁移表未定义（开篇总则：未列出即非法）",
+          "note": ""
+        },
+        {
+          "from": "refunded",
+          "event_id": "E1",
+          "event": "提交报名成功",
+          "code": "R1",
+          "reason": "终态不可迁出（L347）",
+          "note": ""
+        },
+        {
+          "from": "refunded",
+          "event_id": "E2",
+          "event": "支付回调（与 Order 同事务）",
+          "code": "R1",
+          "reason": "终态不可迁出（L347）",
+          "note": ""
+        },
+        {
+          "from": "refunded",
+          "event_id": "E3",
+          "event": "支付超时（与 Order 同事务）",
+          "code": "R1",
+          "reason": "终态不可迁出（L347）",
+          "note": ""
+        },
+        {
+          "from": "refunded",
+          "event_id": "E4",
+          "event": "审核通过（MVP 自动确认）",
+          "code": "R1",
+          "reason": "终态不可迁出（L347）",
+          "note": ""
+        },
+        {
+          "from": "refunded",
+          "event_id": "E5",
+          "event": "退款成功（Order 同事务联动）",
+          "code": "R1",
+          "reason": "终态不可迁出（L347）",
+          "note": "退款只允许 paid/confirmed→refunded，且必须由 Order refunded 事务联动；其它状态拒绝，避免重复回补（§5.3 退款联动要求）"
+        }
+      ],
+      "deadlocks": [],
+      "unreachable": [],
+      "out_degree": {
+        "（无）": 1,
+        "pending_payment": 2,
+        "paid": 2,
+        "cancelled": 0,
+        "confirmed": 1,
+        "refunded": 0
+      },
+      "shortest_paths": {
+        "pending_payment": "（无） -E1-> pending_payment",
+        "paid": "（无） -E1-> pending_payment -E2-> paid",
+        "cancelled": "（无） -E1-> pending_payment -E3-> cancelled",
+        "confirmed": "（无） -E1-> pending_payment -E2-> paid -E4-> confirmed",
+        "refunded": "（无） -E1-> pending_payment -E2-> paid -E5-> refunded",
+        "（无）": "（无）"
+      }
+    }
+  ],
+  "mvp_scope": {
+    "note": "排除标注为“迭代二”的迁移边后的结果；deadlocks 字段表示 MVP 业务终点，不是缺陷",
+    "machines": [
+      {
+        "name": "Lock",
+        "legal": 3,
+        "rejected": 9,
+        "deadlocks": [],
+        "unreachable": []
+      },
+      {
+        "name": "Order",
+        "legal": 6,
+        "rejected": 36,
+        "deadlocks": [],
+        "unreachable": []
+      },
+      {
+        "name": "Enrollment",
+        "legal": 6,
+        "rejected": 24,
+        "deadlocks": [],
+        "unreachable": []
+      }
+    ]
+  },
+  "findings": []
+}

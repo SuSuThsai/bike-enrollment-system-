@@ -1,0 +1,81 @@
+<view wx:if="{{loading}}" class="page">
+  <view class="skeleton hero-skeleton" />
+  <view class="skeleton" />
+  <view class="skeleton" />
+</view>
+
+<view wx:elif="{{error}}" class="page">
+  <view class="error-box">
+    <view>{{error}}</view>
+    <button class="secondary-btn retry-btn" bindtap="retry">重新加载</button>
+  </view>
+</view>
+
+<view wx:elif="{{event}}" class="page page-with-bottom">
+  <view class="hero detail-hero">
+    <view class="status-pill status-{{event.statusTone}}">{{event.statusText}}</view>
+    <view class="hero-title detail-title">{{event.title}}</view>
+    <view class="detail-meta">
+      <view class="meta-row {{event.deadlineSoon ? 'deadline-soon' : ''}}">
+        <text class="meta-label">报名</text>
+        <text>{{event.registrationWindowText}}</text>
+        <text wx:if="{{event.deadlineSoon}}" class="deadline-tag">即将截止</text>
+      </view>
+      <view class="meta-row"><text class="meta-label">赛事</text><text>{{event.eventWindowText}}</text></view>
+      <view class="meta-row"><text class="meta-label">持续</text><text>{{event.durationText}}</text></view>
+      <view class="meta-row"><text class="meta-label">地点</text><text>{{event.location}}</text></view>
+      <view class="meta-row"><text class="meta-label">最低</text><text class="hero-price">{{event.priceText}}</text></view>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="section-title">赛事介绍</view>
+    <view class="body-text">{{event.description}}</view>
+  </view>
+
+  <view wx:if="{{event.rules}}" class="card">
+    <view class="section-title">赛事规则</view>
+    <view class="body-text">{{event.rules}}</view>
+  </view>
+
+  <view class="section-title group-heading">选择组别</view>
+  <view wx:if="{{groups.length === 0}}" class="empty">暂未开放组别</view>
+  <view
+    wx:for="{{groups}}"
+    wx:key="id"
+    class="group-card card {{selectedGroupId === item.id ? 'selected' : ''}}"
+    data-id="{{item.id}}"
+    bindtap="selectGroup"
+  >
+    <view class="row">
+      <view class="group-name">{{item.name}}</view>
+      <view class="status-pill status-{{item.statusTone}}">{{item.statusText}}</view>
+    </view>
+    <view class="group-meta">
+      <text>剩余名额 {{item.remainingText}}</text>
+      <text>{{item.dateText}}</text>
+    </view>
+    <view class="row group-price-row">
+      <view class="price">{{item.priceText}}</view>
+      <view class="select-hint">{{selectedGroupId === item.id ? '已选择' : '点击选择'}}</view>
+    </view>
+  </view>
+
+  <view class="notice disclaimer-note">
+    报名即视为同意该组别的免责协议。免责协议版本以报名表单页展示为准。
+  </view>
+
+  <view wx:if="{{event.registrationHint}}" class="notice">{{event.registrationHint}}</view>
+
+  <view class="bottom-bar">
+    <view class="bottom-price">
+      <view class="tiny">已选组别</view>
+      <view class="bottom-amount">{{selectedGroup ? selectedGroup.priceText : '请选择组别'}}</view>
+    </view>
+    <button
+      class="primary-btn"
+      disabled="{{event.registration_status !== 'open' || !selectedGroup || !selectedGroup.available}}"
+      bindtap="register"
+    >{{event.ctaText}}</button>
+  </view>
+</view>

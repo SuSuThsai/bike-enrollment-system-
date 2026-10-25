@@ -1,0 +1,18 @@
+# 编译产物
+/bin/
+*.exe
+*.test
+*.out
+
+# 本地配置
+.env
+.env.*
+!.env.example
+
+# 微信支付私钥等敏感文件
+configs/*.pem
+configs/*.key
+
+# 编辑器
+.idea/
+.vscode/

@@ -1,0 +1,132 @@
+name: bike-enroll
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: bike-enroll-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-bike_enroll}
+      MYSQL_USER: ${MYSQL_USER:?请在 .env 中设置 MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      TZ: ${TZ:-Asia/Shanghai}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+08:00
+    ports:
+      # 仅绑定本机回环地址，避免把数据库暴露到局域网
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -uroot -p"$$MYSQL_ROOT_PASSWORD" --silent
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks:
+      - backend
+
+  redis:
+    image: redis:7
+    container_name: bike-enroll-redis
+    restart: unless-stopped
+    # 开启 AOF，并每秒 fsync 一次（docs/constraints.md 第 5 条）
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - backend
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      args:
+        GOPROXY: ${GOPROXY:-https://goproxy.io,direct}
+    image: bike-enroll/api:local
+    container_name: bike-enroll-api
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      HTTP_ADDR: ":8080"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TZ: ${TZ:-Asia/Shanghai}
+
+      # 支付提供者：mock（本地联调，不验签）| wechat（真实微信支付）
+      # APP_ENV=production/prod 时 PAYMENT_MODE=mock 会导致 API 拒绝启动
+      PAYMENT_MODE: ${PAYMENT_MODE:-wechat}
+      # 仅 mock 模式的 /internal/mock-pay/* 触发入口使用
+      MOCK_PAY_SECRET: ${MOCK_PAY_SECRET:-}
+
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: ${MYSQL_USER:?请在 .env 中设置 MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-bike_enroll}
+
+      REDIS_ADDR: "redis:6379"
+      REDIS_DB: ${REDIS_DB:-0}
+
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET，生成方式 openssl rand -hex 32}
+      JWT_EXPIRE_HOURS: ${JWT_EXPIRE_HOURS:-168}
+
+      WECHAT_APPID: ${WECHAT_APPID:-}
+      WECHAT_SECRET: ${WECHAT_SECRET:-}
+      WECHAT_PAY_MCHID: ${WECHAT_PAY_MCHID:-}
+      WECHAT_PAY_SERIAL_NO: ${WECHAT_PAY_SERIAL_NO:-}
+      WECHAT_PAY_PRIVATE_KEY_PATH: ${WECHAT_PAY_PRIVATE_KEY_PATH:-./configs/apiclient_key.pem}
+      WECHAT_PAY_NOTIFY_URL: ${WECHAT_PAY_NOTIFY_URL:-https://api.example.com/api/v1/payments/notify}
+      WECHAT_TPL_PAY_RESULT: ${WECHAT_TPL_PAY_RESULT:-}
+      WECHAT_TPL_ENROLL_RESULT: ${WECHAT_TPL_ENROLL_RESULT:-}
+
+      LOCK_TTL_MINUTES: ${LOCK_TTL_MINUTES:-15}
+      # 压测用：把锁 TTL 压缩到秒级（>0 时优先于 LOCK_TTL_MINUTES），生产留空
+      LOCK_TTL_SECONDS: ${LOCK_TTL_SECONDS:-}
+      PAY_TIMEOUT_MINUTES: ${PAY_TIMEOUT_MINUTES:-15}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      # 微信支付私钥等敏感文件不打进镜像，运行时只读挂载
+      - ./server/configs:/app/configs:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    networks:
+      - backend
+
+volumes:
+  mysql_data:
+    name: bike-enroll-mysql-data
+  redis_data:
+    name: bike-enroll-redis-data
+
+networks:
+  backend:
+    name: bike-enroll-backend
+    driver: bridge

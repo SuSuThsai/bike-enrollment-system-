@@ -1,0 +1,32 @@
+<view class="page result-page">
+  <view class="result-icon result-{{tone}}">{{icon}}</view>
+  <view class="result-title">{{title}}</view>
+  <view class="result-desc">{{description}}</view>
+
+  <view wx:if="{{orderId || enrollmentId}}" class="card result-card">
+    <view wx:if="{{orderId}}" class="result-row">
+      <text class="tiny">订单号</text>
+      <text class="mono">{{orderId}}</text>
+    </view>
+    <view wx:if="{{enrollmentId}}" class="result-row">
+      <text class="tiny">报名 ID</text>
+      <text class="mono">{{enrollmentId}}</text>
+    </view>
+  </view>
+
+  <view class="result-actions">
+    <button
+      wx:if="{{status === 'pending' && orderId}}"
+      class="primary-btn"
+      loading="{{paying}}"
+      disabled="{{paying}}"
+      bindtap="payAgain"
+    >继续支付</button>
+    <button class="secondary-btn" bindtap="goMyEnrollments">查看我的报名</button>
+    <button class="ghost-btn" bindtap="goEvents">返回赛事列表</button>
+  </view>
+
+  <view class="notice result-note">
+    支付结果以微信支付回调与小程序订单状态为准。若已扣款但状态未更新，请稍后刷新或联系赛事主办方。
+  </view>
+</view>

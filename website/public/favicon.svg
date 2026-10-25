@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="骑行赛事">
+  <rect width="64" height="64" rx="16" fill="#059669"/>
+  <circle cx="19" cy="41" r="10" fill="none" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="45" cy="41" r="10" fill="none" stroke="#ffffff" stroke-width="4"/>
+  <path d="M19 41L28 24H36L45 41M28 24L24 18H18M36 24L42 18H48" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="24" r="3" fill="#a7f3d0"/>
+</svg>
