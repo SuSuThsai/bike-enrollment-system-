@@ -37,7 +37,7 @@
   },
   "compileType": "miniprogram",
   "libVersion": "3.6.4",
-  "appid": "wx4001a36da9a3ec33",
+  "appid": "",
   "projectname": "bike-enroll-miniapp",
   "miniprogramRoot": "./",
   "simulatorType": "wechat",
